@@ -9,6 +9,9 @@ import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Optional;
 
+//TODO: more formats, maybe move my AudioInputStream implementation from MusicData constructor to here, since it can convert to 16bit and to mono if over 2 channels etc.
+//JAAD AAC decoder and mp4 demultiplexer https://jaadec.sourceforge.net/usage.php
+//You can create a temp file with ffmpeg (or maybe get it with pipe/inputStream?) so it could basically play any file, even video. This if others fail, because it's not fast.
 public class AudioFileReader extends FileReader {
 	private MusicData musicData;
 	private boolean dataRead = false;
@@ -37,6 +40,85 @@ public class AudioFileReader extends FileReader {
 		return musicData;
 	}
 	
+	public void readWav(File file) {
+		try {
+			readerHEAD = 0;
+			byte[] bytes = Files.readAllBytes(file.toPath());
+			
+			print("length: " + bytes.length);
+			
+			String start = readChars(bytes, readerHEAD, 4);
+			print("start: " + start);
+			
+			int size = readInt(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
+			print("size: " + size);
+			
+			String fileType = readChars(bytes, readerHEAD, 4);
+			print("file type: " + fileType);
+			
+			
+			while (!dataRead) {
+				readChunk(bytes);
+			}
+		} catch (IOException e) {
+			
+		}
+	}
+	
+	public void readChunk(byte[] bytes) {
+		String formatChunkMarker = readChars(bytes, readerHEAD, 4);
+		print("format chunk marker: " + formatChunkMarker);
+		
+		if (formatChunkMarker.equals("fmt ")) {
+			readFMTChunk(bytes);
+		} else if (formatChunkMarker.equals("data")) {
+			readData(bytes);
+		} else {
+			int length = readInt(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
+			print("length: " + length);
+			print("Extra info: " + readChars(bytes, readerHEAD, length));
+		}
+	}
+	
+	private void readFMTChunk(byte[] bytes) {
+		int formatDataLength = readInt(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
+		print("format data length: " + formatDataLength);
+		
+		short typeFormat = readShort(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN); //0 = unknown, 1 = PCM/uncompressed, 2 = Microsoft ADPCM, [...], 80 = MPEG etc...
+		print("type format: " + typeFormat);
+		
+		musicData.numberOfChannels = readShort(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
+		print("number of channels: " + musicData.numberOfChannels);
+		
+		musicData.sampleRate = readInt(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
+		print("sample rate: " + musicData.sampleRate);
+		
+		musicData.avgBytesPerSecond = readInt(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN); //(Sample Rate * BitsPerSample * Channels) / 8, if bytesPerSecond * 8 / 1000 you get kb/s
+		print("avg bytes per second: " + musicData.avgBytesPerSecond);
+		
+		musicData.bytesPerFrame = readShort(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN); //(BitsPerSample * Channels) / 8, number means: 1 = 8 bit mono, 2 = 8 bit stereo/16 bit mono, 4 = 16 bit stereo
+		print("bytes per frame: " + musicData.bytesPerFrame);
+		
+		musicData.bitsPerSample = readShort(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
+		print("bits per sample: " + musicData.bitsPerSample);
+		
+		int extraLength = formatDataLength - 16;
+		if (extraLength == 0) {
+			return;
+		}
+		print("extra: " + readChars(bytes, readerHEAD, extraLength));
+	}
+	
+	public void readData(byte[] bytes) {
+		musicData.dataLength = readInt(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
+		print("data length: " + musicData.dataLength);
+		
+		musicData.dataBytes = Arrays.copyOfRange(bytes, readerHEAD, readerHEAD + (int) musicData.dataLength);
+		
+		musicData.setSamples(musicData.convertByteDataToSamples(), false);
+		dataRead = true;
+	}
+	
 	//https://www.programmersought.com/article/13025807723/
 	//and http://mpgedit.org/mpgedit/mpeg_format/mpeghdr.htm
 	//didnt really explain it all, maybe this: https://www.diva-portal.org/smash/get/diva2:830195/FULLTEXT01.pdf
@@ -45,6 +127,9 @@ public class AudioFileReader extends FileReader {
 		try {
 			readerHEAD = 0;
 			byte[] bytes = Files.readAllBytes(file.toPath());
+			
+			musicData.filename = file.getName();
+			System.out.println("File name: " + musicData.filename);
 			
 			print("length: " + bytes.length);
 			
@@ -83,107 +168,6 @@ public class AudioFileReader extends FileReader {
 		
 		String content = readChars(bytes, readerHEAD, frameContentSize);
 		print("content: " + content);
-	}
-	
-	public void readWav(File file) {
-		try {
-			readerHEAD = 0;
-			byte[] bytes = Files.readAllBytes(file.toPath());
-
-			print("length: " + bytes.length);
-
-			String start = readChars(bytes, readerHEAD, 4);
-			print("start: " + start);
-
-			int size = readInt(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
-			print("size: " + size);
-
-			String fileType = readChars(bytes, readerHEAD, 4);
-			print("file type: " + fileType);
-
-
-			while (!dataRead) {
-				readChunk(bytes);
-			}
-		} catch (IOException e) {
-			
-		}
-	}
-	
-	public void readChunk(byte[] bytes) {
-		String formatChunkMarker = readChars(bytes, readerHEAD, 4);
-		print("format chunk marker: " + formatChunkMarker);
-		
-		if (formatChunkMarker.equals("fmt ")) {
-			readFMTChunk(bytes);
-		} else if (formatChunkMarker.equals("data")) {
-			readData(bytes);
-		} else {
-			int length = readInt(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
-			print("length: " + length);
-			print("Extra info: " + readChars(bytes, readerHEAD, length));
-		}
-	}
-	
-	private void readFMTChunk(byte[] bytes) {
-		int formatDataLength = readInt(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
-		print("format data length: " + formatDataLength);
-		
-		short typeFormat = readShort(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN); //0 = unknown, 1 = PCM/uncompressed, 2 = Microsoft ADPCM, [...], 80 = MPEG etc...
-		print("type format: " + typeFormat);
-		
-		musicData.numberOfChannels = readShort(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
-		print("number of channels: " + musicData.numberOfChannels);
-		
-		musicData.sampleRate = readInt(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
-		print("sample rate: " + musicData.sampleRate);
-		
-		musicData.avgBytesPerSecond = readInt(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN); //(Sample Rate * BitsPerSample * Channels) / 8 , if bytesPerSecond * 8 / 1000 you get kb/s
-		print("avg bytes per second: " + musicData.avgBytesPerSecond);
-		
-		musicData.bytesPerFrame = readShort(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN); //(BitsPerSample * Channels) / 8, number means: 1 = 8 bit mono, 2 = 8 bit stereo/16 bit mono, 4 = 16 bit stereo
-		print("bytes per frame: " + musicData.bytesPerFrame);
-		
-		musicData.bitsPerSample = readShort(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
-		print("bits per sample: " + musicData.bitsPerSample);
-		
-		int extraLength = formatDataLength - 16;
-		if (extraLength == 0) {
-			return;
-		}
-		print("extra: " + readChars(bytes, readerHEAD, extraLength));
-	}
-	
-	public void readData(byte[] bytes) {
-		musicData.dataLength = readInt(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
-		print("data length: " + musicData.dataLength);
-		
-		musicData.dataBytes = Arrays.copyOfRange(bytes, readerHEAD, readerHEAD + musicData.dataLength);
-		
-		int bytesPerSample = musicData.bitsPerSample / 8;
-		short[] samples = new short[musicData.dataLength / bytesPerSample];
-		
-		int counter = 0;
-		for (int i = 0; i < musicData.dataBytes.length; i += bytesPerSample, counter++) {
-			ByteBuffer buf = ByteBuffer.wrap(musicData.dataBytes, i, bytesPerSample);
-			buf.order(ByteOrder.LITTLE_ENDIAN);
-			
-			if (bytesPerSample == 1) { //8 bit
-				samples[counter] = (short) (buf.get() - 128);
-			} else if (bytesPerSample == 2) { //16 bit
-				samples[counter] = buf.getShort();
-			} else if (bytesPerSample == 3) { //24 bit, changed to use shorts, scaling to 16bit
-				byte[] tmp = new byte[3];
-				buf.get(tmp);
-				int val = (tmp[0] << 16 | tmp[1] << 8 | tmp[2]);
-				double max24 = 0x800000;
-				int max16 = 0x8000;
-				samples[counter] = (short) ((val / max24) * max16);
-			}
-		}
-		
-		musicData.setSamples(samples);
-		dataRead = true;
 	}
 	
 	private int readMP3TAGSizeInt(byte[] bytes, int offset) {

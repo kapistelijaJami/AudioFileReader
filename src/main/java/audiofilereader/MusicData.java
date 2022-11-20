@@ -1,38 +1,162 @@
 package audiofilereader;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
-import stopwatchtimerrender.Settings;
+import javax.sound.sampled.AudioFormat;
+import javax.sound.sampled.AudioInputStream;
+import javax.sound.sampled.AudioSystem;
+import javax.sound.sampled.UnsupportedAudioFileException;
+import processes.Execute;
+import processes.StreamGobbler;
+import timer.DurationFormat;
 
 public class MusicData {
-	public int numberOfChannels;
-	public int sampleRate;
+	public String filename;
+	public int numberOfChannels; //usually 2 for music
+	public int sampleRate; //usually 44.1k
+	public int bitsPerSample; //usually 16 (which is 2 bytes per sample) One sample per one channel.
+	public int bytesPerFrame; //usually 4 for 2 channels. Frames contain samples from all channels.
 	public int avgBytesPerSecond;
-	public short bytesPerFrame;
-	public short bitsPerSample;
-	public int dataLength;
-	public byte[] dataBytes;
-	private short[] samples;
+	public long dataLength; //full audiodata length in bytes. All samples from all channels interleaved.
+	public byte[] dataBytes; //the actual audiodata for dataLength.
+	private short[] samples; //dataBytes turned into shorts.
 	
-	public short[] samplesLeft;
+	public short[] samplesLeft; //samples separated to channels.
 	public short[] samplesRight;
 	
 	/**
 	 * Creates a MusicData object with 16bit values and given sample rate and number of channels.
 	 * @param sampleRate How many samples per second (per channel)
-	 * @param nbrOrChannels
+	 * @param nbrOfChannels
 	 * @return 
 	 */
-	public static MusicData createMusicData(int sampleRate, int nbrOrChannels) {
+	public static MusicData createMusicData(int sampleRate, int nbrOfChannels) {
 		MusicData musicData = new MusicData();
 		
-		musicData.numberOfChannels = nbrOrChannels;
+		musicData.numberOfChannels = nbrOfChannels;
 		musicData.sampleRate = sampleRate;
 		musicData.bitsPerSample = 16;
+		musicData.bytesPerFrame = (musicData.bitsPerSample * musicData.numberOfChannels) / 8;
 		musicData.avgBytesPerSecond = (musicData.sampleRate * musicData.bitsPerSample * musicData.numberOfChannels) / 8;
-		musicData.bytesPerFrame = (short) ((musicData.bitsPerSample * musicData.numberOfChannels) / 8);
 		
 		return musicData;
+	}
+	
+	public static MusicData createMusicDataByDataBytes(byte[] dataBytes, String filename, int sampleRate, int nbrOfChannels) {
+		MusicData musicData = new MusicData();
+		
+		musicData.numberOfChannels = nbrOfChannels;
+		musicData.sampleRate = sampleRate;
+		musicData.bitsPerSample = 16;
+		musicData.bytesPerFrame = (musicData.bitsPerSample * musicData.numberOfChannels) / 8;
+		musicData.avgBytesPerSecond = (musicData.sampleRate * musicData.bitsPerSample * musicData.numberOfChannels) / 8;
+		
+		musicData.filename = filename;
+		musicData.dataLength = dataBytes.length;
+		musicData.dataBytes = dataBytes;
+		
+		musicData.setSamples(musicData.convertByteDataToSamples(), false);
+		
+		return musicData;
+	}
+	
+	/**
+	 * Create MusicData object with the help of AudioInputStream.
+	 * AudioInputStream can probably read files more consistently than doing it manually.
+	 * @param file
+	 * @return 
+	 */
+	public static MusicData createMusicData(File file) {
+		try {
+			AudioInputStream ais = AudioSystem.getAudioInputStream(file);
+			return new MusicData(ais, file.getName());
+			
+		} catch (IOException | UnsupportedAudioFileException e) {
+			System.err.println(e.getMessage());
+			try {
+				System.out.println("Trying conversion.");
+				System.out.println(file.getAbsolutePath());
+				
+				if (!Execute.programExists("ffmpeg")) {
+					throw new RuntimeException("No ffmpeg installed!");
+				}
+				
+				int channels = 2;
+				long fileSizeInMegabytes = file.length() / 1024 / 1024;
+				if (fileSizeInMegabytes > 100) {
+					channels = 1;
+				}
+				
+				int sampleRate = 44100;
+				if (Execute.programExists("ffprobe -v quiet")) {
+					//finds the sample rate with ffprobe
+					sampleRate = Integer.parseInt(Execute.executeCommandOut("ffprobe -v error -select_streams a -of default=noprint_wrappers=1:nokey=1 -show_entries stream=sample_rate \"" + file.getAbsolutePath() + "\"").trim());
+				}
+				
+				String command = "ffmpeg -i \"" + file.getAbsolutePath() + "\" -c:a pcm_s16le -ac " + channels + " -f s16le pipe:1";
+				//String command = "ffmpeg -i \"" + file.getAbsolutePath() + "\" -c:a pcm_s16le -ac " + channels + " -f wav pipe:1"; //this does something different, doesn't give same amount of samples to both channels (gives more data), and writes wrong amount of bytes to buffer. Must have a header in data.
+				Process process = Execute.executeCommandGetProcess(command);
+				
+				
+				StreamGobbler errorGobbler = new StreamGobbler(process.getErrorStream(), StreamGobbler.Type.ERROR, true);
+				new Thread(errorGobbler).start();
+				
+				byte[] bytes = process.getInputStream().readAllBytes();
+				
+				process.waitFor();
+				process.destroy();
+				
+				return createMusicDataByDataBytes(bytes, file.getName(), sampleRate, channels);
+				
+				
+				//with the use of an extra file
+				//Execute.execute("ffmpeg -i \"" + file.getAbsolutePath() + "\" -c:a pcm_s16le -ac 1 tempFile.wav", false);
+				
+				//AudioInputStream ais = AudioSystem.getAudioInputStream(new File("tempFile.wav"));
+				/*AudioInputStream ais = AudioSystem.getAudioInputStream(process.getInputStream());
+				return new MusicData(ais, file.getName());*/
+				
+			} catch (Exception e2) {
+				System.err.println("Couldn't read or convert the file");
+				e2.printStackTrace();
+			}
+		}
+		return null;
+	}
+	
+	public MusicData() {}
+	
+	public MusicData(AudioInputStream ais, String filename) {
+		try {
+			AudioFormat format = ais.getFormat();
+			
+			//Convert the format to 16 bit and max 2 channels:
+			AudioFormat toAudioFormat = new AudioFormat(format.getSampleRate(), 16, format.getChannels() > 2 ? 1 : format.getChannels(), true, false);
+			if (!AudioSystem.isConversionSupported(toAudioFormat, format)) {
+				throw new IllegalArgumentException("system cannot convert from " + format + " to " + toAudioFormat);
+			}
+			ais = AudioSystem.getAudioInputStream(toAudioFormat, ais);
+			format = ais.getFormat();
+			
+			
+			this.filename = filename;
+			numberOfChannels = format.getChannels();
+			sampleRate = (int) format.getSampleRate();
+			bitsPerSample = format.getSampleSizeInBits();
+			bytesPerFrame = format.getFrameSize();
+			avgBytesPerSecond = (sampleRate * bitsPerSample * numberOfChannels) / 8;
+			dataLength = ais.getFrameLength() * bytesPerFrame;
+		
+			dataBytes = ais.readAllBytes();
+			setSamples(convertByteDataToSamples(), false);
+			
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
 	}
 	
 	public short[] getSamples() {
@@ -61,18 +185,61 @@ public class MusicData {
 		return s;
 	}
 	
-	public void setSamples(short[] samples) {
-		this.samples = samples;
-		if (dataBytes == null || dataBytes.length == 0) {
-			turnSamplesToByteData();
+	public final short[] convertByteDataToSamples() {
+		int bytesPerSample = bitsPerSample / 8;
+		short[] tempSamples = new short[(int) dataLength / bytesPerSample];
+		
+		int counter = 0;
+		for (int i = 0; i < dataBytes.length; i += bytesPerSample, counter++) {
+			ByteBuffer buf = ByteBuffer.wrap(dataBytes, i, bytesPerSample);
+			buf.order(ByteOrder.LITTLE_ENDIAN);
+			
+			switch (bytesPerSample) {
+				case 1:
+					//8 bit
+					tempSamples[counter] = (short) (buf.get() - 128);
+					break;
+				case 2:
+					//16 bit
+					tempSamples[counter] = buf.getShort();
+					break;
+				case 3:
+					//24 bit, changed to use shorts, scaling to 16bit
+					byte[] tmp = new byte[3];
+					buf.get(tmp);
+					int val = (tmp[0] << 16 | tmp[1] << 8 | tmp[2]);
+					double max24 = 0x800000;
+					int max16 = 0x8000;
+					tempSamples[counter] = (short) ((val / max24) * max16);
+					break;
+			}
 		}
-		separateSamplesToChannels();
+		return tempSamples;
 	}
 	
-	public void setSamplesDuplicateChannel(short[] samples) {
-		this.samples = duplicateChannel(samples);
+	public void clearData() {
+		dataBytes = null;
+		samples = null;
+		samplesLeft = null;
+		samplesRight = null;
+	}
+	
+	/**
+	 * DuplicateMonoToStereo is used only when you want 2 channels, but only provide mono.
+	 * You knew previously that you were going to get 2 channels, and already initialized musicData with 2 channels.
+	 * This does not change number of channels automatically.
+	 * Also if using duplicateMonoToStereo dataBytes should be null, and created in this method.
+	 * @param samples
+	 * @param duplicateMonoToStereo 
+	 */
+	public final void setSamples(short[] samples, boolean duplicateMonoToStereo) {
+		if (duplicateMonoToStereo) {
+			this.samples = duplicateChannel(samples);
+		} else {
+			this.samples = samples;
+		}
 		if (dataBytes == null || dataBytes.length == 0) {
-			turnSamplesToByteData();
+			turnSamplesToByteData(); //we need dataBytes for audio playback, samples are used for other things.
 		}
 		separateSamplesToChannels();
 	}
@@ -95,17 +262,21 @@ public class MusicData {
 		}
 		
 		int counter = 0;
-		samplesLeft = new short[samples.length / 2];
-		samplesRight = new short[samples.length / 2];
+		samplesLeft = new short[samples.length / numberOfChannels + 1];
+		samplesRight = new short[samples.length / numberOfChannels + 1];
 		
 		for (int i = 0; i < samples.length; i++) {
 			short val = samples[i];
 			if (i % numberOfChannels == 0) {
 				samplesLeft[counter] = val;
 			} else {
+				if (counter >= samplesRight.length) {
+					break;
+				}
 				samplesRight[counter] = val;
 				counter++;
 			}
+			
 			if (numberOfChannels == 1) {
 				counter++;
 			}
@@ -113,15 +284,16 @@ public class MusicData {
 		
 		Duration dur = Duration.ofMillis(getDurationMillis());
 		
-		Settings s = new Settings("hh:mm:ss.lll");
+		DurationFormat s = new DurationFormat("hh:mm:ss.lll");
 		System.out.println("Duration: " + s.format(dur));
 	}
 	
 	private void turnSamplesToByteData() {
-		dataBytes = new byte[samples.length * 2];
+		dataBytes = new byte[samples.length * 2]; //2 bytes per sample for 16bit
 		
 		for (int i = 0; i < samples.length; i++) {
-			int sample = samples[i];
+			short sample = samples[i];
+			//convert from short to 2 bytes
 			dataBytes[2 * i] = (byte) (sample & 0xff);
 			dataBytes[2 * i + 1] = (byte) (sample >> 8 & 0xff);
 		}
@@ -158,11 +330,12 @@ public class MusicData {
 	}
 	
 	public String microsToDurationString(long micros) {
-		Duration dur = Duration.of(micros, ChronoUnit.MICROS);
-		String start = dur.toHours() > 0 ? "hh:": "";
+		Duration audioFullDuration = Duration.of(getDurationMicros(), ChronoUnit.MICROS);
+		String format = (audioFullDuration.toHours() > 0 ? "hh:": "") + "mm:ss.lll";
+		DurationFormat formatter = new DurationFormat(format);
 		
-		Settings s = new Settings(start + "mm:ss.lll");
-		return s.format(dur);
+		Duration dur = Duration.of(micros, ChronoUnit.MICROS);
+		return formatter.format(dur);
 	}
 	
 	public int microsToFrameNumber(long micros) {
@@ -175,6 +348,10 @@ public class MusicData {
 	
 	public long microsToByteNumber(long micros) {
 		return microsToFrameNumber(micros) * bytesPerFrame;
+	}
+	
+	public long millisToByteNumber(long millis) {
+		return millisToFrameNumber(millis) * bytesPerFrame;
 	}
 	
 	public long secondsToByteNumber(long seconds) {
