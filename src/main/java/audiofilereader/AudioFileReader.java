@@ -113,7 +113,7 @@ public class AudioFileReader extends FileReader {
 		musicData.dataLength = readInt(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
 		print("data length: " + musicData.dataLength);
 		
-		musicData.dataBytes = Arrays.copyOfRange(bytes, readerHEAD, readerHEAD + (int) musicData.dataLength);
+		musicData.setDataBytes(Arrays.copyOfRange(bytes, readerHEAD, readerHEAD + (int) musicData.dataLength));
 		
 		musicData.setSamples(musicData.convertByteDataToSamples(), false);
 		dataRead = true;
