@@ -93,7 +93,7 @@ public class MusicData {
 				
 				String durText = null;
 				int sampleRate = 44100;
-				if (Execute.programExists("ffprobe -v quiet")) {
+				if (Execute.programExists("ffprobe -v quiet")) { //TODO: make these also check the file version, on top of the path/command version
 					//finds the sample rate with ffprobe
 					String result = Execute.executeCommandOut("ffprobe -v error -select_streams a:0 -of default=noprint_wrappers=1:nokey=1 -show_entries stream=sample_rate \"" + file.getAbsolutePath() + "\"").trim();
 					sampleRate = Integer.parseInt(result);
@@ -430,11 +430,15 @@ public class MusicData {
 	}
 
 	public long frameToMicros(long frame) {
-		return (long) (frame / (double) sampleRate * 1e6);
+		return (long) (frameToSeconds(frame) * 1e6);
 	}
 
 	public long frameToMillis(long frame) {
-		return (long) (frame / (double) sampleRate * 1000);
+		return (long) (frameToSeconds(frame) * 1000);
+	}
+	
+	public double frameToSeconds(long frame) {
+		return frame / (double) sampleRate;
 	}
 	
 	public int getMaxValue() {
