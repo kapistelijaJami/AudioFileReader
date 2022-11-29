@@ -87,8 +87,8 @@ public class AudioFileReader extends FileReader {
 		short typeFormat = readShort(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN); //0 = unknown, 1 = PCM/uncompressed, 2 = Microsoft ADPCM, [...], 80 = MPEG etc...
 		print("type format: " + typeFormat);
 		
-		musicData.numberOfChannels = readShort(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
-		print("number of channels: " + musicData.numberOfChannels);
+		musicData.setChannels(readShort(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN));
+		print("number of channels: " + musicData.getChannels());
 		
 		musicData.sampleRate = readInt(bytes, readerHEAD, ByteOrder.LITTLE_ENDIAN);
 		print("sample rate: " + musicData.sampleRate);

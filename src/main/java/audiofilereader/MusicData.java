@@ -1,8 +1,6 @@
 package audiofilereader;
 
 import java.io.File;
-import java.io.FileDescriptor;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -19,7 +17,8 @@ import timer.DurationFormat;
 
 public class MusicData {
 	public String filename;
-	public int numberOfChannels; //usually 2 for music
+	public String filePath;
+	private int channels; //usually 2 for music
 	public int sampleRate; //usually 44.1k
 	public int bitsPerSample; //usually 16 (which is 2 bytes per sample) One sample per one channel.
 	public int bytesPerFrame; //usually 4 for 2 channels. Frames contain samples from all channels.
@@ -31,7 +30,7 @@ public class MusicData {
 	private short[] samplesLeft; //samples separated to channels.
 	private short[] samplesRight;
 	
-	public static double CONVERT_PROGRESS;
+	public static double convertProgress;
 	
 	/**
 	 * Creates a MusicData object with 16bit values and given sample rate and number of channels.
@@ -42,17 +41,17 @@ public class MusicData {
 	public static MusicData createMusicData(int sampleRate, int nbrOfChannels) {
 		MusicData musicData = new MusicData();
 		
-		musicData.numberOfChannels = nbrOfChannels;
+		musicData.channels = nbrOfChannels;
 		musicData.sampleRate = sampleRate;
 		musicData.bitsPerSample = 16;
-		musicData.bytesPerFrame = (musicData.bitsPerSample * musicData.numberOfChannels) / 8;
-		musicData.avgBytesPerSecond = (musicData.sampleRate * musicData.bitsPerSample * musicData.numberOfChannels) / 8;
+		musicData.bytesPerFrame = (musicData.bitsPerSample * musicData.channels) / 8;
+		musicData.avgBytesPerSecond = (musicData.sampleRate * musicData.bitsPerSample * musicData.channels) / 8;
 		
 		return musicData;
 	}
 	
-	public static MusicData createMusicDataByDataBytes(byte[] dataBytes, String filename, int sampleRate, int nbrOfChannels) {
-		MusicData musicData = createMusicData(sampleRate, nbrOfChannels);
+	public static MusicData createMusicDataByDataBytes(byte[] dataBytes, String filename, int sampleRate, int channels) {
+		MusicData musicData = createMusicData(sampleRate, channels);
 		
 		musicData.filename = filename;
 		musicData.dataLength = dataBytes.length;
@@ -79,7 +78,7 @@ public class MusicData {
 			
 			try {
 				System.out.println("Trying conversion.\n");
-				CONVERT_PROGRESS = 0;
+				convertProgress = 0;
 				System.out.println(file.getAbsolutePath());
 				
 				if (!Execute.programExists("ffmpeg")) {
@@ -108,6 +107,9 @@ public class MusicData {
 				String command = "ffmpeg -i \"" + file.getAbsolutePath() + "\" -c:a pcm_s16le -ac " + channels + " -f s16le pipe:1";
 				//String command = "ffmpeg -i \"" + file.getAbsolutePath() + "\" -c:a pcm_s16le -ac " + channels + " -f wav pipe:1"; //this does something different, doesn't give same amount of samples to both channels (gives more data), and writes wrong amount of bytes to buffer. Must have a header in data or smt.
 				Process process = Execute.executeCommandGetProcess(command);
+				
+				
+				
 				
 				new StreamGobblerText(process.getErrorStream(), StreamGobbler.Type.ERROR, false, text -> MusicData.updateConvertProgress(FFmpegProgress.getProgress(text, dur))).start();
 				
@@ -138,7 +140,7 @@ public class MusicData {
 		if (percent < 0) {
 			return;
 		}
-		CONVERT_PROGRESS = percent;
+		convertProgress = percent;
 	}
 	
 	public static MusicData createDefault() {
@@ -161,11 +163,11 @@ public class MusicData {
 			
 			
 			this.filename = filename;
-			numberOfChannels = format.getChannels();
+			channels = format.getChannels();
 			sampleRate = (int) format.getSampleRate();
 			bitsPerSample = format.getSampleSizeInBits();
 			bytesPerFrame = format.getFrameSize();
-			avgBytesPerSecond = (sampleRate * bitsPerSample * numberOfChannels) / 8;
+			avgBytesPerSecond = (sampleRate * bitsPerSample * channels) / 8;
 			dataLength = ais.getFrameLength() * bytesPerFrame;
 		
 			dataBytes = ais.readAllBytes();
@@ -174,6 +176,14 @@ public class MusicData {
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
+	}
+	
+	public int getChannels() {
+		return channels;
+	}
+	
+	public void setChannels(int channels) {
+		this.channels = channels;
 	}
 	
 	public byte[] getDataBytes() {
@@ -206,23 +216,28 @@ public class MusicData {
 	}
 	
 	public short[] getSamplesRight() {
-		if (samplesRight == null) {
+		if (channels == 1) {
+			return getSamplesLeft();
+		} else if (samplesRight == null) {
 			return new short[0];
 		}
 		return samplesRight;
 	}
 	
 	public short[] getSamplesByChannel(boolean left) {
-		return getSamplesByChannel(left, 0, (int) getFrameCount());
+		if (left) {
+			return getSamplesLeft();
+		}
+		return getSamplesRight();
 	}
 	
 	//Use only for small ranges.
 	public short[] getSamplesByChannel(boolean left, int startFrame, int length) {
 		short[] s = new short[length];
 		
-		int start = startFrame * numberOfChannels + ((!left && numberOfChannels == 2) ? 1 : 0);
+		int start = startFrame * channels + ((!left && channels == 2) ? 1 : 0);
 		int count = 0;
-		for (int i = start; count < length; i += numberOfChannels) {
+		for (int i = start; count < length; i += channels) {
 			if (i < 0) {
 				continue;
 			}
@@ -280,6 +295,7 @@ public class MusicData {
 	 * You knew previously that you were going to get 2 channels, and already initialized musicData with 2 channels.
 	 * This does not change number of channels automatically.
 	 * Also if using duplicateMonoToStereo dataBytes should be null, and created in this method.
+	 * If you already made MusicData with different audio, use clearData() to clear them. But preferably just create new MusicData object.
 	 * @param samples
 	 * @param duplicateMonoToStereo 
 	 */
@@ -313,12 +329,12 @@ public class MusicData {
 		}
 		
 		int counter = 0;
-		samplesLeft = new short[samples.length / numberOfChannels + 1];
-		samplesRight = new short[samples.length / numberOfChannels + 1];
+		samplesLeft = new short[samples.length / channels + 1];
+		samplesRight = new short[samples.length / channels + 1];
 		
 		for (int i = 0; i < samples.length; i++) {
 			short val = samples[i];
-			if (i % numberOfChannels == 0) {
+			if (i % channels == 0) {
 				samplesLeft[counter] = val;
 			} else {
 				if (counter >= samplesRight.length) {
@@ -328,7 +344,7 @@ public class MusicData {
 				counter++;
 			}
 			
-			if (numberOfChannels == 1) {
+			if (channels == 1) {
 				counter++;
 			}
 		}
