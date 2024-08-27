@@ -21,7 +21,7 @@ public class MusicData {
 	private int channels; //usually 2 for music
 	public int sampleRate; //usually 44.1k
 	public int bitsPerSample; //usually 16 (which is 2 bytes per sample) One sample per one channel.
-	public int bytesPerFrame; //usually 4 for 2 channels. Frames contain samples from all channels.
+	public int bytesPerFrame; //usually 4 for 2 channels. Frames contain samples from all channels. One short (2 bytes) per channel.
 	public int avgBytesPerSecond;
 	public long dataLength; //full audiodata length in bytes. All samples from all channels interleaved.
 	private byte[] dataBytes; //the actual audiodata for dataLength.
@@ -68,8 +68,11 @@ public class MusicData {
 	 * @param file
 	 * @return 
 	 */
-	public static MusicData createMusicData(File file) {
+	public static MusicData createMusicData(File file) { //TODO: move this and convertProgress to AudioFileReader instead.
 		try {
+			if (file == null) {
+				return null;
+			}
 			AudioInputStream ais = AudioSystem.getAudioInputStream(file);
 			return new MusicData(ais, file.getName());
 			
@@ -105,7 +108,7 @@ public class MusicData {
 				Duration dur = (durText != null) ? Duration.ofSeconds((int) Double.parseDouble(durText)) : null;
 				
 				String command = "ffmpeg -i \"" + file.getAbsolutePath() + "\" -c:a pcm_s16le -ac " + channels + " -f s16le pipe:1";
-				//String command = "ffmpeg -i \"" + file.getAbsolutePath() + "\" -c:a pcm_s16le -ac " + channels + " -f wav pipe:1"; //this does something different, doesn't give same amount of samples to both channels (gives more data), and writes wrong amount of bytes to buffer. Must have a header in data or smt.
+				//String command = "ffmpeg -i \"" + file.getAbsolutePath() + "\" -c:a pcm_s16le -ac " + channels + " -f wav pipe:1"; //this does something different, doesn't give same amount of samples to both channels (gives more data), and writes wrong amount of bytes to buffer. Must have a header in data or smth.
 				Process process = Execute.executeCommandGetProcess(command);
 				
 				
@@ -191,6 +194,13 @@ public class MusicData {
 			return new byte[0];
 		}
 		return dataBytes;
+	}
+	
+	public byte getDataByte(int index) {
+		if (dataBytes == null || index < 0 || index >= dataBytes.length) {
+			return 0;
+		}
+		return dataBytes[index];
 	}
 	
 	public long getDataLength() {
@@ -411,6 +421,10 @@ public class MusicData {
 	
 	public int millisToFrameNumber(long millis) {
 		return (int) (sampleRate * millis / 1000);
+	}
+	
+	public int secondsToFrameNumber(double seconds) {
+		return (int) (sampleRate * seconds);
 	}
 	
 	public long microsToByteNumber(long micros) {
